@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "duplicate-finder"
+version = "0.1.0"
+description = "Find and clean duplicate files by size and hash"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Xu Jiaqi", email = "jiaqixu12138@gmail.com" }
+]
+keywords = ["duplicate", "finder", "cleaner", "cli", "files"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+duplicate-finder = "duplicate_finder.cli:main"
+dupf = "duplicate_finder.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Master-626/duplicate-finder"
+Repository = "https://github.com/Master-626/duplicate-finder"
+Issue-Tracker = "https://github.com/Master-626/duplicate-finder/issues"
