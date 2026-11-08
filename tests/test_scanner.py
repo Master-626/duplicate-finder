@@ -1,6 +1,6 @@
 import pytest
-from pathlib import Path
-from duplicate_finder.scanner import scan_by_size, scan_by_hash, get_file_hash
+
+from duplicate_finder.scanner import get_file_hash, scan_by_hash, scan_by_size
 
 
 def test_scan_by_size(tmp_path):
@@ -47,3 +47,15 @@ def test_get_file_hash(tmp_path):
     hash1 = get_file_hash(file1)
     hash2 = get_file_hash(file2)
     assert hash1 == hash2
+
+
+def test_file_symlinks_are_not_duplicate_candidates(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("only one real file")
+    link = tmp_path / "link.txt"
+    try:
+        link.symlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available")
+    assert scan_by_size(str(tmp_path)) == {}
+    assert scan_by_hash(str(tmp_path)) == {}

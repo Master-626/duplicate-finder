@@ -5,7 +5,7 @@ File scanning logic for duplicate detection.
 import hashlib
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 
 def get_file_hash(file_path: Path, chunk_size: int = 8192) -> str:
@@ -23,7 +23,7 @@ def scan_by_size(directory: str) -> Dict[int, List[Path]]:
     size_map = defaultdict(list)
 
     for file_path in dir_path.rglob("*"):
-        if file_path.is_file():
+        if not file_path.is_symlink() and file_path.is_file():
             size = file_path.stat().st_size
             size_map[size].append(file_path)
 
