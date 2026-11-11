@@ -182,3 +182,151 @@ def test_empty_and_single_file_groups_are_not_removed(tmp_path):
     assert clean_duplicates({}) == (0, 0)
     assert clean_duplicates({"digest": files[:1]}) == (0, 0)
     assert all(path.exists() for path in files)
+
+
+def test_repeated_path_does_not_delete_the_only_copy(tmp_path):
+    only = tmp_path / "only.txt"
+    only.write_text("precious")
+    assert clean_duplicates({"digest": [only, only]}) == (0, 0)
+    assert only.read_text() == "precious"
+
+
+def test_symlink_alias_of_the_kept_file_is_not_deleted(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    only = real / "only.txt"
+    only.write_text("precious")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available")
+
+    alias = link / "only.txt"
+    assert clean_duplicates({"digest": [only, alias]}, keep_strategy="first") == (0, 0)
+    assert only.read_text() == "precious"
+    assert alias.read_text() == "precious"
+
+
+def test_symlink_alias_of_a_duplicate_is_removed_once(tmp_path):
+    keeper = tmp_path / "keeper.txt"
+    real = tmp_path / "real"
+    real.mkdir()
+    duplicate = real / "dup.txt"
+    payload = b"duplicate data"
+    keeper.write_bytes(payload)
+    duplicate.write_bytes(payload)
+    os.utime(keeper, (100, 100))
+    os.utime(duplicate, (200, 200))
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available")
+
+    alias = link / "dup.txt"
+    cleaned, freed = clean_duplicates(
+        {"digest": [keeper, duplicate, alias]}, keep_strategy="oldest"
+    )
+    assert (cleaned, freed) == (1, len(payload))
+    assert keeper.read_bytes() == payload
+    assert not duplicate.exists()
+    assert not alias.exists()
+
+
+def test_keep_strategies_use_nanosecond_timestamps(tmp_path):
+    older = tmp_path / "older.txt"
+    newer = tmp_path / "newer.txt"
+    payload = b"duplicate data"
+    older.write_bytes(payload)
+    newer.write_bytes(payload)
+    base = 1_735_000_000_123_456_789
+    os.utime(older, ns=(base, base))
+    os.utime(newer, ns=(base + 1, base + 1))
+    older_stat = older.stat()
+    newer_stat = newer.stat()
+    if older_stat.st_mtime_ns == newer_stat.st_mtime_ns:
+        pytest.skip("filesystem does not store nanosecond timestamps")
+    # Float seconds collapse this pair, so a sort on st_mtime keeps input order.
+    assert older_stat.st_mtime == newer_stat.st_mtime
+
+    listed_newer_first = [newer, older]
+    clean_duplicates({"digest": listed_newer_first}, keep_strategy="oldest")
+    assert older.read_bytes() == payload
+    assert not newer.exists()
+
+    older.write_bytes(payload)
+    newer.write_bytes(payload)
+    os.utime(older, ns=(base, base))
+    os.utime(newer, ns=(base + 1, base + 1))
+    clean_duplicates({"digest": [newer, older]}, keep_strategy="newest")
+    assert newer.read_bytes() == payload
+    assert not older.exists()
+
+
+def _link_or_skip(source, destination):
+    try:
+        os.link(source, destination)
+    except OSError as exc:
+        pytest.skip(f"hard links are not available: {exc}")
+
+
+def test_hard_link_names_of_the_kept_file_are_preserved(tmp_path):
+    payload = b"z" * 50
+    kept = tmp_path / "kept.txt"
+    alias = tmp_path / "alias.txt"
+    copy = tmp_path / "copy.txt"
+    kept.write_bytes(payload)
+    copy.write_bytes(payload)
+    _link_or_skip(kept, alias)
+    os.utime(kept, (100, 100))
+    os.utime(copy, (200, 200))
+
+    assert clean_duplicates({"digest": [alias, kept, copy]}, keep_strategy="oldest") == (1, 50)
+    assert kept.read_bytes() == payload
+    assert alias.read_bytes() == payload
+    assert not copy.exists()
+
+
+def test_removing_every_link_of_a_duplicate_frees_it_once(tmp_path):
+    payload = b"z" * 40
+    keeper = tmp_path / "keeper.txt"
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    keeper.write_bytes(payload)
+    first.write_bytes(payload)
+    _link_or_skip(first, second)
+    os.utime(keeper, (100, 100))
+    os.utime(first, (200, 200))
+
+    assert clean_duplicates({"digest": [keeper, first, second]}, keep_strategy="oldest") == (
+        2,
+        40,
+    )
+    assert keeper.read_bytes() == payload
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_backup_of_hard_linked_duplicate_counts_content_once(tmp_path):
+    payload = b"z" * 40
+    root = tmp_path / "input"
+    root.mkdir()
+    keeper = root / "keeper.txt"
+    first = root / "first.txt"
+    second = root / "second.txt"
+    keeper.write_bytes(payload)
+    first.write_bytes(payload)
+    _link_or_skip(first, second)
+    os.utime(keeper, (100, 100))
+    os.utime(first, (200, 200))
+    backup = tmp_path / "backup"
+
+    assert clean_duplicates({"digest": [keeper, first, second]}, backup_dir=backup) == (2, 40)
+    assert keeper.read_bytes() == payload
+    assert not first.exists()
+    assert not second.exists()
+    saved = list(backup.iterdir())
+    assert len(saved) == 2
+    assert saved[0].samefile(saved[1])
+    assert saved[0].read_bytes() == payload
