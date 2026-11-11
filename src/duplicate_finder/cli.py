@@ -7,10 +7,11 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from .cleaner import clean_duplicates
-from .scanner import format_size, scan_by_hash, scan_by_size
+from .cleaner import clean_duplicates, removal_plan, removed_bytes
+from .scanner import duplicate_waste, format_size, scan_by_hash, scan_by_size
 
-console = Console()
+# Keep paths on one line so a wrapped filename is not cut in half.
+console = Console(soft_wrap=True)
 
 
 def _scan_directory(value):
@@ -18,6 +19,32 @@ def _scan_directory(value):
     if not path.is_dir():
         raise click.BadParameter("must be an existing directory", param_hint="--directory")
     return path
+
+
+def _print_groups(duplicates):
+    """List every path in each duplicate group."""
+    if not duplicates:
+        return
+    console.print("\n   Groups:")
+    for index, files in enumerate(duplicates.values(), start=1):
+        console.print(f"   Group {index}")
+        for file_path in sorted(files, key=str):
+            console.print(f"     {file_path}", markup=False)
+
+
+def _print_plan(plans, backup):
+    """Show the kept path and each path that would be removed or backed up."""
+    action = "Back up" if backup else "Remove"
+    printed = False
+    for keeper, removals in plans:
+        if not removals:
+            continue
+        if printed:
+            console.print()
+        printed = True
+        console.print(f"   Keep: {keeper}", markup=False)
+        for file_path in removals:
+            console.print(f"   {action}: {file_path}", markup=False)
 
 
 @click.group()
@@ -45,13 +72,18 @@ def scan(directory, method):
     except OSError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    # Show summary
-    total_dups = sum(len(files) - 1 for files in duplicates.values())
-    total_size = sum(files[0].stat().st_size * (len(files) - 1) for files in duplicates.values())
+    # Show summary. Count inodes, so hard-linked names are not extra copies.
+    total_dups = 0
+    total_size = 0
+    for files in duplicates.values():
+        extra, wasted = duplicate_waste(files)
+        total_dups += extra
+        total_size += wasted
 
     console.print("\n📊 Summary:")
     console.print(f"   Duplicate files: {total_dups}")
     console.print(f"   Space wasted: {format_size(total_size)}")
+    _print_groups(duplicates)
 
 
 @main.command()
@@ -81,16 +113,25 @@ def clean(directory, keep, backup_dir, dry_run):
     except OSError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    total_dups = sum(len(files) - 1 for files in duplicates.values())
-    total_size = sum(files[0].stat().st_size * (len(files) - 1) for files in duplicates.values())
+    plans = []
+    for files in duplicates.values():
+        if len(files) <= 1:
+            continue
+        plans.append(removal_plan(files, keep))
+    removals = [path for _keeper, to_remove in plans for path in to_remove]
+    total_dups = len(removals)
+    total_size = removed_bytes(removals, backup=backup_path is not None)
 
     console.print("\n🧹 Cleanup Summary:")
     console.print(f"   Files to clean: {total_dups}")
     label = "Bytes to back up" if backup_path is not None else "Space to free"
     console.print(f"   {label}: {format_size(total_size)}")
+    if removals:
+        console.print()
+        _print_plan(plans, backup=backup_path is not None)
 
     if dry_run:
-        console.print("\n   [yellow]Dry run - no files were actually removed[/yellow]")
+        console.print("\n   [yellow]Dry run - no files were changed[/yellow]")
         return
 
     try:
